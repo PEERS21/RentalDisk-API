@@ -1,0 +1,13 @@
+aiohttp
+grpcio
+protobuf
+websockets
+SQLAlchemy>=1.4
+asyncmy
+alembic
+aiofiles
+Pillow
+python-dotenv
+PyJWT
+redis
+python-dateutil

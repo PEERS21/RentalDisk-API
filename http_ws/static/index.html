@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Витрина дисков</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header>
+  <h1>Витрина дисков</h1>
+  <button id="filterBtn">Фильтры</button>
+</header>
+
+<main>
+  <!-- Категория PlayStation -->
+  <section class="category">
+    <h2>PlayStation</h2>
+    <div class="gallery">
+      <div class="item">
+        <img src="images/game1.jpg" alt="Игра 1">
+        <h3>Игра ПС1</h3>
+        <button class="rentBtn">Арендовать</button>
+      </div>
+      <div class="item">
+        <img src="images/game2.jpg" alt="Игра 2">
+        <h3>Игра ПС2</h3>
+        <button class="rentBtn">Арендовать</button>
+      </div>
+    </div>
+  </section>
+  <!-- Категория Xbox -->
+  <section class="category">
+    <h2>Xbox</h2>
+    <div class="gallery">
+      <div class="item">
+        <img src="images/game3.jpg" alt="Игра 3">
+        <h3>Игра X1</h3>
+        <button class="rentBtn">Арендовать</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Анимированная панель фильтров (избегает мобильного для iOS Safari) -->
+<div id="filterPanel" class="panel hidden">
+  <h2>Фильтры</h2>
+  <!-- Примеры фильтров -->
+  <label><input type="checkbox"> PlayStation</label><br>
+  <label><input type="checkbox"> Xbox</label><br>
+  <button id="closeFilter">Закрыть</button>
+</div>
+
+<!-- Панель аренды -->
+<div id="rentPanel" class="panel hidden">
+  <h2>Аренда диска</h2>
+  <p id="rentInfo">Информация о выбранной игре</p>
+  <button id="closeRent">Закрыть</button>
+</div>
+
+<!-- Панель сканирования QR -->
+<div id="scanPanel" class="panel hidden">
+  <h2>Сканирование QR</h2>
+  <video id="video" playsinline></video>
+  <canvas id="canvas" hidden></canvas>
+  <p id="scanResult"></p>
+  <button id="stopScan">Стоп</button>
+</div>
+
+<!-- Кнопка запуска сканера QR -->
+<button id="scanBtn">Сканировать QR</button>
+
+<script src="https://unpkg.com/jsqr"></script>
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
