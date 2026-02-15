@@ -1,5 +1,0 @@
-grpcio
-protobuf
-redis
-Pillow
-pyzbar
