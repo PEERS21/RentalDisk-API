@@ -33,7 +33,7 @@ from dotenv import dotenv_values
 
 from http_ws.auth import _make_hmac
 
-config = dotenv_values(".env")
+config = dotenv_values("/run/secrets/rentaldisk_api/.env")
 
 TARGET_TZ = timezone(timedelta(hours=int(config.get("TZ_OFFSET_HOURS", ""))))
 MAX_BOOKING_DURATION = timedelta(hours=int(config.get("MAX_BOOKING_DURATION", "")))
@@ -71,7 +71,7 @@ async def ping(request):
 
 @routes.get("/static/{name:.*}")
 async def static_files(request):
-    root = config.get("STATIC_ROOT", "")
+    root = STATIC_ROOT
     name = request.match_info["name"]
     path = os.path.join(root, name)
     if not os.path.isfile(path):
@@ -223,8 +223,8 @@ async def block_item(request):
     except ValueError:
         raise web.HTTPBadRequest(text="time must be positive integer seconds")
 
-    if duration > int(config.get("MAX_BOOKING_SECONDS", "")):
-        raise web.HTTPBadRequest(text=f"duration cannot exceed {config.get("MAX_BOOKING_SECONDS", "")}")
+    if duration > MAX_BOOKING_SECONDS:
+        raise web.HTTPBadRequest(text=f"duration cannot exceed {MAX_BOOKING_SECONDS}")
 
     try:
         req_start = datetime.fromtimestamp(start_ts, tz=UTC)

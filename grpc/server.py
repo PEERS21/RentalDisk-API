@@ -22,7 +22,7 @@ from common.db_init import AsyncSessionLocal
 from common.db_models import Disk
 from dotenv import dotenv_values
 
-config = dotenv_values(".env")
+config = dotenv_values("/run/secrets/rentaldisk_api/.env")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api.server")
 
