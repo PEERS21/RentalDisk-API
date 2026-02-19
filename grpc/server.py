@@ -20,17 +20,16 @@ from pyzbar.pyzbar import decode as decode_qr
 
 from common.db_init import AsyncSessionLocal
 from common.db_models import Disk
-from dotenv import dotenv_values
+from os import getenv
 
-config = dotenv_values("/run/secrets/rentaldisk_api/.env")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api.server")
 
-REDIS_URL = config.get("REDIS_URL", "redis://localhost:6379/0")
-GRPC_PORT = int(config.get("GRPC_PORT", "50051"))
-TEMP_DIR = config.get("TEMP_DIR", "/tmp/uploads")
+REDIS_URL = getenv("REDIS_URL", "redis://localhost:6379/0")
+GRPC_PORT = int(getenv("GRPC_PORT", "50051"))
+TEMP_DIR = getenv("TEMP_DIR", "/tmp/uploads")
 os.makedirs(TEMP_DIR, exist_ok=True)
-TEMP_TTL = int(config.get("TEMP_TTL", "3600"))  # seconds for temp key in redis
+TEMP_TTL = int(getenv("TEMP_TTL", "3600"))  # seconds for temp key in redis
 
 class qrServicer(pb2_grpc.qrServicer):
     async def UploadPhotos(self, request_iterator, context):

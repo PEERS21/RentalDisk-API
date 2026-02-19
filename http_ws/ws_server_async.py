@@ -26,17 +26,13 @@ from aiohttp import web
 from sqlalchemy import select, func
 from sqlalchemy.exc import NoResultFound
 from datetime import datetime, timedelta, UTC, timezone
-
+from os import getenv
 import dateutil.parser
 
-from dotenv import dotenv_values
+from common.auth import make_hmac
 
-from http_ws.auth import _make_hmac
-
-config = dotenv_values("/run/secrets/rentaldisk_api/.env")
-
-TARGET_TZ = timezone(timedelta(hours=int(config.get("TZ_OFFSET_HOURS", ""))))
-MAX_BOOKING_DURATION = timedelta(hours=int(config.get("MAX_BOOKING_DURATION", "")))
+TARGET_TZ = timezone(timedelta(hours=int(getenv("TZ_OFFSET_HOURS", ""))))
+MAX_BOOKING_DURATION = timedelta(hours=int(getenv("MAX_BOOKING_DURATION", "")))
 MAX_BOOKING_SECONDS = int(MAX_BOOKING_DURATION.total_seconds())
 BASE_DIR = os.path.dirname(__file__)
 STATIC_ROOT = os.path.join(os.path.join(BASE_DIR, "http_ws"), "static")
@@ -61,7 +57,7 @@ def _extract_bearer(request: web.Request) -> str:
 
 async def authorize_request(request: web.Request):
     token = _extract_bearer(request)
-    if token != config.get("AUTH_STATIC_TOKEN", ""):
+    if token != getenv("AUTH_STATIC_TOKEN", ""):
         _unauthorized("Invalid token")
 
 @routes.get("/ping")
@@ -169,7 +165,7 @@ async def check_item(request):
         raise web.HTTPBadRequest(text="Missing query param: login")
 
     logger.info("connect to redis")
-    redis = aioredis.from_url(config.get("REDIS_URL", ""), decode_responses=True)
+    redis = aioredis.from_url(getenv("REDIS_URL", ""), decode_responses=True)
     disk_name = await redis.get(f"check:{login}")
     if disk_name:
         logger.info("confirmed")
@@ -191,7 +187,7 @@ async def check_item(request):
         raise web.HTTPBadRequest(text="Missing query param: login")
 
     logger.info("connect to redis")
-    redis = aioredis.from_url(config.get("REDIS_URL", ""), decode_responses=True)
+    redis = aioredis.from_url(getenv("REDIS_URL", ""), decode_responses=True)
     disk_name = await redis.get(f"check:{login}")
     if disk_name:
         logger.info("confirmed")
@@ -211,13 +207,13 @@ async def block_item(request):
     login = request.get('user', dict()).get("login")
     disk_name = data.get("disk_name")
     start_ts = data.get("start_ts")
-    duration = data.get("duration_sec", int(config.get("DEFAULT_SEC_TIME", "")))
+    duration = data.get("duration_sec", int(getenv("DEFAULT_SEC_TIME", "")))
 
     if not login or not disk_name or not start_ts or not duration:
         raise web.HTTPBadRequest(text="Missing query param: disk_name or start_ts or duration or login")
 
     try:
-        duration = int(duration) if duration is not None else int(config.get("DEFAULT_SEC_TIME", ""))
+        duration = int(duration) if duration is not None else int(getenv("DEFAULT_SEC_TIME", ""))
         if duration <= 0:
             raise ValueError
     except ValueError:
@@ -271,7 +267,7 @@ async def block_item(request):
             res_cnt = await session.execute(cnt_q)
             user_active = res_cnt.scalar_one()
 
-            if user_active >= int(config.get("DISK_LIMIT", "")):
+            if user_active >= int(getenv("DISK_LIMIT", "")):
                 status = "user reached limit"
                 raise web.HTTPBadRequest(text=status)
 
@@ -306,7 +302,7 @@ async def request_confirmation(booking_id, disk, user_login):
         "correlation_id": correlation
     }
 
-    redis = aioredis.from_url(config.get("REDIS_URL", ""), decode_responses=True)
+    redis = aioredis.from_url(getenv("REDIS_URL", ""), decode_responses=True)
     await redis.publish("bot:requests", json.dumps(payload))
 
     # Опционально: ждать ответа с тайм-аутом
@@ -399,7 +395,7 @@ async def overwrite_availability_all(request):
         items = result.scalars().all()
         items = [it.to_dict() for it in items]
         for item in items:
-            h = _make_hmac(item.get('name'))
+            h = make_hmac(item.get('name'))
             disk = Disk(
                 name=item.get('name', "unnamed"),
                 disk_hash=h,
@@ -424,7 +420,7 @@ async def overwrite_availability(request):
             raise web.HTTPNotFound()
 
         item = it.to_dict()
-        h = _make_hmac(item.get('name'))
+        h = make_hmac(item.get('name'))
         disk = Disk(
             name=item.get('name', "unnamed"),
             disk_hash=h,
@@ -523,7 +519,7 @@ async def create_item(request):
                 fname2, w2, h2 = await save_uploaded_image(
                     client_img_content['content'],
                     client_img_content['filename'],
-                    config.get("IMAGES_DIR", "")
+                    getenv("IMAGES_DIR", "")
                 )
                 item.client_img_filename = fname2
                 item.client_img_height = h2
@@ -553,12 +549,12 @@ async def delete_item(request):
             raise web.HTTPNotFound()
         if it.img_filename:
             try:
-                os.remove(os.path.join(config.get("IMAGES_DIR", ""), it.img_filename))
+                os.remove(os.path.join(getenv("IMAGES_DIR", ""), it.img_filename))
             except Exception:
                 pass
         if it.client_img_filename:
             try:
-                os.remove(os.path.join(config.get("IMAGES_DIR", ""), it.client_img_filename))
+                os.remove(os.path.join(getenv("IMAGES_DIR", ""), it.client_img_filename))
             except Exception:
                 pass
         await session.delete(it)
@@ -706,7 +702,7 @@ async def ws_upload(request):
     # Call grpc.aio stub with async generator (client streaming)
     try:
         logger.info("Streaming to gRPC backend...")
-        response = await stub.UploadPhotos(grpc_gen(), timeout=int(config.get("GRPC_TIMEOUT", "")))
+        response = await stub.UploadPhotos(grpc_gen(), timeout=int(getenv("GRPC_TIMEOUT", "")))
         # response is pb2.UploadSummary
         is_confirmed = response.confirmed
         disk_from_qr = response.disk
@@ -780,7 +776,7 @@ def make_app():
 
     async def on_startup(app):
         logger.info("on_startup: creating grpc aio channel and stub (in running loop)")
-        channel = grpc.aio.insecure_channel(config.get("GRPC_ADDR", ""))
+        channel = grpc.aio.insecure_channel(getenv("GRPC_ADDR", ""))
         stub = pb2_grpc.qrStub(channel)
         app["grpc_channel"] = channel
         app["grpc_stub"] = stub
@@ -804,4 +800,4 @@ def make_app():
 
 if __name__ == "__main__":
     main_frame = make_app()
-    web.run_app(main_frame, host="localhost", port=int(config.get("PORT", "4235")))
+    web.run_app(main_frame, host="localhost", port=int(getenv("PORT", "4235")))
