@@ -9,8 +9,8 @@ from aiohttp import web, WSMsgType, WSMessage
 from redis.asyncio import Redis
 from sqlalchemy import select, and_, or_
 
-from grpc import qr_pb2 as pb2
-from grpc import qr_pb2_grpc as pb2_grpc
+from grpc_proto import qr_pb2 as pb2
+from grpc_proto import qr_pb2_grpc as pb2_grpc
 
 import grpc
 
