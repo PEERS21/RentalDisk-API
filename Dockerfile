@@ -16,6 +16,6 @@ RUN pip install --upgrade pip setuptools wheel \
  && pip install --no-cache-dir "redis==7.2.0"
 RUN pip install grpcio-tools
 
-CMD ["python", "-m", "http_ws/ws_server_async"]
+CMD ["python", "-m", "http_ws.ws_server_async"]
 
 EXPOSE 4235
