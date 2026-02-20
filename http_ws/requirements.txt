@@ -2,12 +2,12 @@ aiohttp
 grpcio
 protobuf
 websockets
-SQLAlchemy>=1.4
+SQLAlchemy
 asyncmy
 alembic
 aiofiles
 Pillow
 python-dotenv
 PyJWT
-redis
+redis=>7.2.0
 python-dateutil
