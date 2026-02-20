@@ -9,5 +9,5 @@ aiofiles
 Pillow
 python-dotenv
 PyJWT
-redis=>7.2.0
+redis==7.2.0
 python-dateutil
