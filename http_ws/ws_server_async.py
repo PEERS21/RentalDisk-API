@@ -800,4 +800,4 @@ def make_app():
 
 if __name__ == "__main__":
     main_frame = make_app()
-    web.run_app(main_frame, host="localhost", port=int(getenv("PORT", "4235")))
+    web.run_app(main_frame, host="0.0.0.0", port=int(getenv("PORT", "4235")))
