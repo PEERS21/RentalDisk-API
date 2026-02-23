@@ -846,7 +846,7 @@ def make_app():
     swagger.add_get(
         "/ping",
         ping,
-        summary="Health check",
+        description="Health check",
         description="Простейший чек здоровья сервиса",
         security=[{"BearerAuth": []}],
         responses={200: {"description": "ok", "content": {
@@ -857,7 +857,7 @@ def make_app():
     swagger.add_get(
         "/occupied_times",
         occupied_times,
-        summary="Get occupied times",
+        description="Get occupied times",
         description="Возвращает занятые интервалы для указанной даты (интерпретируется в локальном TZ).",
         security=[{"BearerAuth": []}],
         parameters=[
@@ -877,7 +877,7 @@ def make_app():
     swagger.add_get(
         "/check",
         check_item,
-        summary="Check presence (light)",
+        description="Check presence (light)",
         security=[{"BearerAuth": []}],
         description="Проверка наличия маркера в Redis (требуется аутентификация).",
         responses={200: {"description": "confirmed", "content": {"application/json": {"schema": simple_status_schema}}},
@@ -887,7 +887,7 @@ def make_app():
     swagger.add_get(
         "/del_check",
         del_check_item,
-        summary="Check and delete marker (consume)",
+        description="Check and delete marker (consume)",
         security=[{"BearerAuth": []}],
         description="Проверка и удаление маркера (требуется аутентификация).",
         responses={200: {"description": "confirmed", "content": {"application/json": {"schema": simple_status_schema}}},
@@ -897,7 +897,7 @@ def make_app():
     swagger.add_post(
         "/block",
         block_item,
-        summary="Block disk (create booking)",
+        description="Block disk (create booking)",
         security=[{"BearerAuth": []}],
         description="Создаёт временную блокировку/бронь на диск (auth required). Поля: disk_name (str), start_ts (epoch int), duration_sec (int).",
         request_body={
@@ -926,7 +926,7 @@ def make_app():
     swagger.add_get(
         "/unblock",
         unblock_item,
-        summary="Unblock (confirm return)",
+        description="Unblock (confirm return)",
         security=[{"BearerAuth": []}],
         description="Запрос разблокировки — требует параметр `disk` и аутентификацию. Отправляет событие в Redis и ожидает ответа от бота.",
         parameters=[{"name": "disk", "in": "query", "required": True, "schema": {"type": "string"}}],
@@ -940,7 +940,7 @@ def make_app():
     swagger.add_get(
         "/items",
         list_items,
-        summary="List available items",
+        description="List available items",
         security=[{"BearerAuth": []}],
         description="Список доступных Item'ов.",
         responses={200: {"description": "List of items",
@@ -950,7 +950,7 @@ def make_app():
     swagger.add_get(
         "/items/{id}",
         get_item,
-        summary="Get item by id",
+        description="Get item by id",
         security=[{"BearerAuth": []}],
         parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
         responses={200: {"description": "Item", "content": {"application/json": {"schema": item_schema}}},
@@ -960,7 +960,7 @@ def make_app():
     swagger.add_post(
         "/item",
         create_item,
-        summary="Create item",
+        description="Create item",
         security=[{"BearerAuth": []}],
         description="Создать item. Endpoint поддерживает multipart/form-data: поля name, company, title, content, categories (JSON array or CSV) и client_img file.",
         request_body={
@@ -990,7 +990,7 @@ def make_app():
         "/items/{id}",
         delete_item,
         security=[{"BearerAuth": []}],
-        summary="Delete item (remove db row)",
+        description="Delete item (remove db row)",
         parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
         responses={200: {"description": "Deleted"}, 401: {"description": "Unauthorized"},
                    404: {"description": "Not found"}}
@@ -1000,7 +1000,7 @@ def make_app():
         "/availability/items",
         overwrite_availability_all,
         security=[{"BearerAuth": []}],
-        summary="Create disks from items (bulk)",
+        description="Create disks from items (bulk)",
         description="Создаёт Disk записи на основе Item'ов (auth required).",
         responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}}
     )
@@ -1009,7 +1009,7 @@ def make_app():
         "/availability/items/{id}",
         overwrite_availability,
         security=[{"BearerAuth": []}],
-        summary="Create disk for item by id",
+        description="Create disk for item by id",
         parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
         responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}, 404: {"description": "Not found"}}
     )
@@ -1018,7 +1018,7 @@ def make_app():
         "/availability/items/{name}",
         delete_availability,
         security=[{"BearerAuth": []}],
-        summary="Mark disk unavailable",
+        description="Mark disk unavailable",
         parameters=[{"name": "name", "in": "path", "required": True, "schema": {"type": "string"}}],
         responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}, 404: {"description": "Not found"}}
     )
@@ -1027,7 +1027,7 @@ def make_app():
         "/my_bookings",
         get_my_bookings,
         security=[{"BearerAuth": []}],
-        summary="List bookings for current user",
+        description="List bookings for current user",
         description="Require auth; optional query param pickupped=1 to filter current pickups.",
         parameters=[{"name": "pickupped", "in": "query", "required": False, "schema": {"type": "string"}}],
         responses={200: {"description": "Bookings list", "content": {
@@ -1038,7 +1038,7 @@ def make_app():
     swagger.add_get(
         "/ws/upload",
         ws_upload,
-        summary="WebSocket file uploader (upgrade to ws)",
+        description="WebSocket file uploader (upgrade to ws)",
         security=[{"BearerAuth": []}],
         description=(
             "Этот путь выполняет WebSocket handshake (HTTP GET + Upgrade). После установления соединения "
