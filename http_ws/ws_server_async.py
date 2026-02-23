@@ -160,7 +160,7 @@ async def occupied_times(request: web.Request):
 
 @routes.get("/del_check")
 @require_auth()
-async def check_item(request):
+async def del_check_item(request):
     login = request.get('user', dict()).get("login")
     if not login:
         raise web.HTTPBadRequest(text="Missing query param: login")
@@ -775,7 +775,284 @@ def make_app():
     app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
     app.add_routes(routes)
 
-    swagger = SwaggerDocs(app, swagger_ui_settings=SwaggerUiSettings(path="/docs"))
+    swagger = SwaggerDocs(app, swagger_ui_settings=SwaggerUiSettings(path="/docs"),
+                          components={
+                              "securitySchemes": {
+                                  "BearerAuth": {
+                                      "type": "http",
+                                      "scheme": "bearer",
+                                      "bearerFormat": "Bearer"
+                                  }
+                              }
+                          })
+
+    item_schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "name": {"type": "string"},
+            "company": {"type": ["string", "null"]},
+            "title": {"type": ["string", "null"]},
+            "content": {"type": ["string", "null"]},
+            "img_filename": {"type": ["string", "null"]},
+            "img_width": {"type": ["integer", "null"]},
+            "img_height": {"type": ["integer", "null"]},
+            "client_img_filename": {"type": ["string", "null"]},
+            "client_img_width": {"type": ["integer", "null"]},
+            "client_img_height": {"type": ["integer", "null"]},
+            "categories": {"type": "array", "items": {"type": "integer"}},
+            "created_at": {"type": ["string", "null"], "format": "date-time"},
+            "available": {"type": "boolean"},
+        },
+        "required": ["id", "name"]
+    }
+
+    occupied_interval_schema = {
+        "type": "object",
+        "properties": {
+            "start": {"type": "string", "format": "date-time"},
+            "end": {"type": "string", "format": "date-time"}
+        }
+    }
+
+    occupied_resp_schema = {
+        "type": "object",
+        "properties": {
+            "date": {"type": "string"},
+            "disk_id": {"type": ["integer", "null"]},
+            "occupied": {"type": "array", "items": occupied_interval_schema}
+        }
+    }
+
+    simple_status_schema = {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string"}
+        }
+    }
+
+    ok_status_schema = {
+        "type": "object",
+        "properties": {
+            "ok": {"type": "boolean"},
+            "status": {"type": "string"}
+        }
+    }
+
+    my_bookings_item_schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "disk_name": {"type": "string"},
+            "start_ts": {"type": "integer"},
+            "end_ts": {"type": ["integer", "null"]}
+        }
+    }
+
+    swagger.add_get(
+        "/ping",
+        ping,
+        summary="Health check",
+        description="Простейший чек здоровья сервиса",
+        security=[{"BearerAuth": []}],
+        responses={200: {"description": "ok", "content": {
+            "application/json": {"schema": {"type": "object", "properties": {"status": {"type": "string"}}}}}}}
+    )
+
+    # 2) occupied_times (query params: date, disk_id)
+    swagger.add_get(
+        "/occupied_times",
+        occupied_times,
+        summary="Get occupied times",
+        description="Возвращает занятые интервалы для указанной даты (интерпретируется в локальном TZ).",
+        security=[{"BearerAuth": []}],
+        parameters=[
+            {"name": "date", "in": "query", "required": True, "schema": {"type": "string"},
+             "description": "Дата в формате YYYY-MM-DD"},
+            {"name": "disk_id", "in": "query", "required": False, "schema": {"type": "integer"},
+             "description": "ID диска (опционально)"}
+        ],
+        responses={
+            200: {"description": "Occupied intervals",
+                  "content": {"application/json": {"schema": occupied_resp_schema}}},
+            400: {"description": "Bad request", "content": {
+                "application/json": {"schema": {"type": "object", "properties": {"error": {"type": "string"}}}}}}
+        }
+    )
+
+    swagger.add_get(
+        "/check",
+        check_item,
+        summary="Check presence (light)",
+        security=[{"BearerAuth": []}],
+        description="Проверка наличия маркера в Redis (требуется аутентификация).",
+        responses={200: {"description": "confirmed", "content": {"application/json": {"schema": simple_status_schema}}},
+                   401: {"description": "Unauthorized"}}
+    )
+
+    swagger.add_get(
+        "/del_check",
+        del_check_item,
+        summary="Check and delete marker (consume)",
+        security=[{"BearerAuth": []}],
+        description="Проверка и удаление маркера (требуется аутентификация).",
+        responses={200: {"description": "confirmed", "content": {"application/json": {"schema": simple_status_schema}}},
+                   401: {"description": "Unauthorized"}}
+    )
+
+    swagger.add_post(
+        "/block",
+        block_item,
+        summary="Block disk (create booking)",
+        security=[{"BearerAuth": []}],
+        description="Создаёт временную блокировку/бронь на диск (auth required). Поля: disk_name (str), start_ts (epoch int), duration_sec (int).",
+        request_body={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "disk_name": {"type": "string"},
+                            "start_ts": {"type": "integer"},
+                            "duration_sec": {"type": "integer"}
+                        },
+                        "required": ["disk_name", "start_ts"]
+                    }
+                }
+            }
+        },
+        responses={
+            200: {"description": "OK", "content": {"application/json": {"schema": ok_status_schema}}},
+            400: {"description": "Bad request"},
+            401: {"description": "Unauthorized"}
+        }
+    )
+
+    swagger.add_get(
+        "/unblock",
+        unblock_item,
+        summary="Unblock (confirm return)",
+        security=[{"BearerAuth": []}],
+        description="Запрос разблокировки — требует параметр `disk` и аутентификацию. Отправляет событие в Redis и ожидает ответа от бота.",
+        parameters=[{"name": "disk", "in": "query", "required": True, "schema": {"type": "string"}}],
+        responses={
+            200: {"description": "Result", "content": {"application/json": {"schema": ok_status_schema}}},
+            400: {"description": "Bad request"},
+            401: {"description": "Unauthorized"},
+        }
+    )
+
+    swagger.add_get(
+        "/items",
+        list_items,
+        summary="List available items",
+        security=[{"BearerAuth": []}],
+        description="Список доступных Item'ов.",
+        responses={200: {"description": "List of items",
+                         "content": {"application/json": {"schema": {"type": "array", "items": item_schema}}}}}
+    )
+
+    swagger.add_get(
+        "/items/{id}",
+        get_item,
+        summary="Get item by id",
+        security=[{"BearerAuth": []}],
+        parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
+        responses={200: {"description": "Item", "content": {"application/json": {"schema": item_schema}}},
+                   404: {"description": "Not found"}}
+    )
+
+    swagger.add_post(
+        "/item",
+        create_item,
+        summary="Create item",
+        security=[{"BearerAuth": []}],
+        description="Создать item. Endpoint поддерживает multipart/form-data: поля name, company, title, content, categories (JSON array or CSV) и client_img file.",
+        request_body={
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "company": {"type": "string"},
+                            "title": {"type": "string"},
+                            "content": {"type": "string"},
+                            "categories": {"type": "string", "description": "JSON array or CSV string"},
+                            "client_img": {"type": "string", "format": "binary"}
+                        },
+                        "required": ["name"]
+                    }
+                }
+            }
+        },
+        responses={201: {"description": "Created", "content": {"application/json": {"schema": item_schema}}},
+                   401: {"description": "Unauthorized"}}
+    )
+
+    swagger.add_delete(
+        "/items/{id}",
+        delete_item,
+        security=[{"BearerAuth": []}],
+        summary="Delete item (remove db row)",
+        parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
+        responses={200: {"description": "Deleted"}, 401: {"description": "Unauthorized"},
+                   404: {"description": "Not found"}}
+    )
+
+    swagger.add_post(
+        "/availability/items",
+        overwrite_availability_all,
+        security=[{"BearerAuth": []}],
+        summary="Create disks from items (bulk)",
+        description="Создаёт Disk записи на основе Item'ов (auth required).",
+        responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}}
+    )
+
+    swagger.add_post(
+        "/availability/items/{id}",
+        overwrite_availability,
+        security=[{"BearerAuth": []}],
+        summary="Create disk for item by id",
+        parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
+        responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}, 404: {"description": "Not found"}}
+    )
+
+    swagger.add_delete(
+        "/availability/items/{name}",
+        delete_availability,
+        security=[{"BearerAuth": []}],
+        summary="Mark disk unavailable",
+        parameters=[{"name": "name", "in": "path", "required": True, "schema": {"type": "string"}}],
+        responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}, 404: {"description": "Not found"}}
+    )
+
+    swagger.add_get(
+        "/my_bookings",
+        get_my_bookings,
+        security=[{"BearerAuth": []}],
+        summary="List bookings for current user",
+        description="Require auth; optional query param pickupped=1 to filter current pickups.",
+        parameters=[{"name": "pickupped", "in": "query", "required": False, "schema": {"type": "string"}}],
+        responses={200: {"description": "Bookings list", "content": {
+            "application/json": {"schema": {"type": "array", "items": my_bookings_item_schema}}}},
+                   401: {"description": "Unauthorized"}}
+    )
+
+    swagger.add_get(
+        "/ws/upload",
+        ws_upload,
+        summary="WebSocket file uploader (upgrade to ws)",
+        security=[{"BearerAuth": []}],
+        description=(
+            "Этот путь выполняет WebSocket handshake (HTTP GET + Upgrade). После установления соединения "
+            "клиент должен отправить JSON meta, затем бинарные чанки и затем сообщение type='end'. "
+            "Swagger UI не выполняет WebSocket upgrade автоматически; этот путь описан для документации."
+        ),
+        responses={101: {"description": "Switching Protocols (WebSocket upgrade)"}},
+    )
 
     async def on_startup(app):
         logger.info("on_startup: creating grpc aio channel and stub (in running loop)")
