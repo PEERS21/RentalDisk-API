@@ -847,7 +847,6 @@ def make_app():
         "/ping",
         ping,
         description="Health check",
-        description="Простейший чек здоровья сервиса",
         security=[{"BearerAuth": []}],
         responses={200: {"description": "ok", "content": {
             "application/json": {"schema": {"type": "object", "properties": {"status": {"type": "string"}}}}}}}
@@ -858,7 +857,6 @@ def make_app():
         "/occupied_times",
         occupied_times,
         description="Get occupied times",
-        description="Возвращает занятые интервалы для указанной даты (интерпретируется в локальном TZ).",
         security=[{"BearerAuth": []}],
         parameters=[
             {"name": "date", "in": "query", "required": True, "schema": {"type": "string"},
@@ -879,7 +877,6 @@ def make_app():
         check_item,
         description="Check presence (light)",
         security=[{"BearerAuth": []}],
-        description="Проверка наличия маркера в Redis (требуется аутентификация).",
         responses={200: {"description": "confirmed", "content": {"application/json": {"schema": simple_status_schema}}},
                    401: {"description": "Unauthorized"}}
     )
@@ -889,7 +886,6 @@ def make_app():
         del_check_item,
         description="Check and delete marker (consume)",
         security=[{"BearerAuth": []}],
-        description="Проверка и удаление маркера (требуется аутентификация).",
         responses={200: {"description": "confirmed", "content": {"application/json": {"schema": simple_status_schema}}},
                    401: {"description": "Unauthorized"}}
     )
@@ -899,7 +895,6 @@ def make_app():
         block_item,
         description="Block disk (create booking)",
         security=[{"BearerAuth": []}],
-        description="Создаёт временную блокировку/бронь на диск (auth required). Поля: disk_name (str), start_ts (epoch int), duration_sec (int).",
         request_body={
             "required": True,
             "content": {
@@ -928,7 +923,6 @@ def make_app():
         unblock_item,
         description="Unblock (confirm return)",
         security=[{"BearerAuth": []}],
-        description="Запрос разблокировки — требует параметр `disk` и аутентификацию. Отправляет событие в Redis и ожидает ответа от бота.",
         parameters=[{"name": "disk", "in": "query", "required": True, "schema": {"type": "string"}}],
         responses={
             200: {"description": "Result", "content": {"application/json": {"schema": ok_status_schema}}},
@@ -942,7 +936,6 @@ def make_app():
         list_items,
         description="List available items",
         security=[{"BearerAuth": []}],
-        description="Список доступных Item'ов.",
         responses={200: {"description": "List of items",
                          "content": {"application/json": {"schema": {"type": "array", "items": item_schema}}}}}
     )
@@ -962,7 +955,6 @@ def make_app():
         create_item,
         description="Create item",
         security=[{"BearerAuth": []}],
-        description="Создать item. Endpoint поддерживает multipart/form-data: поля name, company, title, content, categories (JSON array or CSV) и client_img file.",
         request_body={
             "required": True,
             "content": {
@@ -1001,7 +993,6 @@ def make_app():
         overwrite_availability_all,
         security=[{"BearerAuth": []}],
         description="Create disks from items (bulk)",
-        description="Создаёт Disk записи на основе Item'ов (auth required).",
         responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}}
     )
 
@@ -1028,7 +1019,6 @@ def make_app():
         get_my_bookings,
         security=[{"BearerAuth": []}],
         description="List bookings for current user",
-        description="Require auth; optional query param pickupped=1 to filter current pickups.",
         parameters=[{"name": "pickupped", "in": "query", "required": False, "schema": {"type": "string"}}],
         responses={200: {"description": "Bookings list", "content": {
             "application/json": {"schema": {"type": "array", "items": my_bookings_item_schema}}}},
@@ -1040,11 +1030,6 @@ def make_app():
         ws_upload,
         description="WebSocket file uploader (upgrade to ws)",
         security=[{"BearerAuth": []}],
-        description=(
-            "Этот путь выполняет WebSocket handshake (HTTP GET + Upgrade). После установления соединения "
-            "клиент должен отправить JSON meta, затем бинарные чанки и затем сообщение type='end'. "
-            "Swagger UI не выполняет WebSocket upgrade автоматически; этот путь описан для документации."
-        ),
         responses={101: {"description": "Switching Protocols (WebSocket upgrade)"}},
     )
 
