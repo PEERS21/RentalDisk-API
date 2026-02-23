@@ -28,6 +28,7 @@ from sqlalchemy.exc import NoResultFound
 from datetime import datetime, timedelta, UTC, timezone
 from os import getenv
 import dateutil.parser
+from aiohttp_swagger3 import SwaggerDocs, SwaggerUiSettings
 
 from common.auth import make_hmac
 
@@ -773,6 +774,8 @@ def make_app():
     """Создаёт aiohttp Application и регистрирует маршруты и lifecycle hooks."""
     app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
     app.add_routes(routes)
+
+    swagger = SwaggerDocs(app, swagger_ui_settings=SwaggerUiSettings(path="/api/docs"))
 
     async def on_startup(app):
         logger.info("on_startup: creating grpc aio channel and stub (in running loop)")
