@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import uuid
+from pathlib import Path
 from typing import List
 
 from aiohttp import web, WSMsgType, WSMessage
@@ -769,6 +770,7 @@ async def init_db():
 async def close_engine(app):
     await ENGINE.dispose()
 
+COMPONENTS_PATH = str(Path(__file__).parent / "components.yaml")
 
 def make_app():
     """Создаёт aiohttp Application и регистрирует маршруты и lifecycle hooks."""
@@ -776,15 +778,7 @@ def make_app():
     app.add_routes(routes)
 
     swagger = SwaggerDocs(app, swagger_ui_settings=SwaggerUiSettings(path="/docs"),
-                          components={
-                              "securitySchemes": {
-                                  "BearerAuth": {
-                                      "type": "http",
-                                      "scheme": "bearer",
-                                      "bearerFormat": "Bearer"
-                                  }
-                              }
-                          })
+                          components=COMPONENTS_PATH)
 
     item_schema = {
         "type": "object",
