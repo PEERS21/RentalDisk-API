@@ -775,7 +775,7 @@ def make_app():
     app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
     app.add_routes(routes)
 
-    swagger = SwaggerDocs(app, swagger_ui_settings=SwaggerUiSettings(path="/api/docs"))
+    swagger = SwaggerDocs(app, swagger_ui_settings=SwaggerUiSettings(path="/docs"))
 
     async def on_startup(app):
         logger.info("on_startup: creating grpc aio channel and stub (in running loop)")
