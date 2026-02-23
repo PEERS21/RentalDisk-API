@@ -74,7 +74,7 @@ async def static_files(request):
         raise web.HTTPNotFound()
     return web.FileResponse(path)
 
-@routes.get("/api/occupied_times")
+@routes.get("/occupied_times")
 async def occupied_times(request: web.Request):
     """
     GET params:
@@ -157,7 +157,7 @@ async def occupied_times(request: web.Request):
     })
 
 
-@routes.get("/api/del_check")
+@routes.get("/del_check")
 @require_auth()
 async def check_item(request):
     login = request.get('user', dict()).get("login")
@@ -179,7 +179,7 @@ async def check_item(request):
     await redis.aclose()
     return web.json_response({"status": "how do you do this?"})
 
-@routes.get("/api/check")
+@routes.get("/check")
 @require_auth()
 async def check_item(request):
     login = request.get('user', dict()).get("login")
@@ -200,7 +200,7 @@ async def check_item(request):
     await redis.aclose()
     return web.json_response({"status": "how do you do this?"})
 
-@routes.post("/api/block")
+@routes.post("/block")
 @require_auth()
 async def block_item(request):
     data = await request.json()
@@ -327,7 +327,7 @@ async def request_confirmation(booking_id, disk, user_login):
 
     return response
 
-@routes.get("/api/unblock")
+@routes.get("/unblock")
 @require_auth()
 async def unblock_item(request):
     login = request.get('user', dict()).get("login")
@@ -383,7 +383,7 @@ async def list_items(request):
         items = result.scalars().all()
         return web.json_response([it.to_dict() for it in items])
 
-@routes.post("/api/availability/items")
+@routes.post("/availability/items")
 async def overwrite_availability_all(request):
     try:
         await authorize_request(request)
@@ -405,7 +405,7 @@ async def overwrite_availability_all(request):
             await session.commit()
         return web.json_response({"ok": True})
 
-@routes.post("/api/availability/items/{id}")
+@routes.post("/availability/items/{id}")
 async def overwrite_availability(request):
     try:
         await authorize_request(request)
@@ -430,7 +430,7 @@ async def overwrite_availability(request):
         await session.commit()
         return web.json_response({"ok": True})
 
-@routes.delete("/api/availability/items/{name}")
+@routes.delete("/availability/items/{name}")
 async def delete_availability(request):
     try:
         await authorize_request(request)
@@ -461,7 +461,7 @@ async def get_item(request):
             raise web.HTTPNotFound()
         return web.json_response(it.to_dict())
 
-@routes.post("/api/items")
+@routes.post("/item")
 async def create_item(request):
     try:
         await authorize_request(request)
@@ -533,7 +533,7 @@ async def create_item(request):
         await session.flush()
         return web.json_response(item.to_dict(), status=201)
 
-@routes.delete("/api/items/{id}")
+@routes.delete("/items/{id}")
 async def delete_item(request):
     try:
         await authorize_request(request)
@@ -561,7 +561,7 @@ async def delete_item(request):
         await session.commit()
         return web.json_response({"status": "deleted"})
 
-@routes.get("/api/my_bookings")
+@routes.get("/my_bookings")
 @require_auth()
 async def get_my_bookings(request):
     user_login = request['user'].get('login')
