@@ -891,11 +891,12 @@ def make_app():
     app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
     api_app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
     api_app.add_routes(routes)
-    api_app.middlewares.append(validation_middleware)
     api_app.on_startup.append(on_startup)
     api_app.on_cleanup.append(on_cleanup)
 
     app.add_subapp("/api/", api_app)
+    app.middlewares.append(validation_middleware)
+
     logger.info("Version 1.2")
 
     setup_aiohttp_apispec(
