@@ -3,6 +3,8 @@ import functools
 from aiohttp import web, ClientSession
 from os import getenv
 
+from aiohttp.web_exceptions import HTTPFound
+
 AUTH_SERVICE_URL = getenv("AUTH_SERVICE_URL", "http://localhost:8888/verify")
 
 
@@ -34,7 +36,9 @@ def require_auth():
 
                         auth_info = await resp.json()
                         request['user'] = {"login": auth_info.get('user')}
-
+            except HTTPFound:
+                redirect_url = resp.headers.get('Location')
+                raise web.HTTPFound(location=redirect_url)
             except Exception as e:
                 print(e, flush=True)
                 return web.json_response({'error': 'auth_service_unavailable'}, status=503)
