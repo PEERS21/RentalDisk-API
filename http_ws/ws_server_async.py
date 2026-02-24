@@ -105,6 +105,7 @@ async def ping(request):
     return web.json_response({"status": "ok"})
 
 @routes.get("/static/{name:.*}")
+@require_auth()
 async def static_files(request):
     root = STATIC_ROOT
     name = request.match_info["name"]
@@ -888,12 +889,14 @@ def make_app():
         logger.info("on_cleanup complete")
 
     app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
-    app.add_routes(routes)
-    app.middlewares.append(validation_middleware)
-    app.on_startup.append(on_startup)
-    app.on_cleanup.append(on_cleanup)
+    api_app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
+    api_app.add_routes(routes)
+    api_app.middlewares.append(validation_middleware)
+    api_app.on_startup.append(on_startup)
+    api_app.on_cleanup.append(on_cleanup)
 
-    logger.info("Version 1.1")
+    app.add_subapp("/api/", api_app)
+    logger.info("Version 1.2")
 
     setup_aiohttp_apispec(
         app=app,
@@ -901,7 +904,7 @@ def make_app():
         title="Аренда дисков PS5, XBOX, игрового времени PC",
         version="v1",
         url="/api/docs/swagger.json",
-        swagger_path="/docs",
+        swagger_path="/api/docs",
         static_path="/api/static/swagger",
         securityDefinitions={
             "ApiKeyAuth": {
