@@ -1,5 +1,4 @@
 import functools
-from idlelib.run import flush_stdout
 
 from aiohttp import web, ClientSession
 from os import getenv
