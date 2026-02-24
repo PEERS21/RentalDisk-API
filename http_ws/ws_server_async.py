@@ -899,7 +899,7 @@ def make_app():
     logger.info("Version 1")
 
     setup_aiohttp_apispec(
-        app=api_app,
+        app=app,
         ui_version=3,
         title="Аренда дисков PS5, XBOX, игрового времени PC",
         version="v1",
