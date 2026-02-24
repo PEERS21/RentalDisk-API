@@ -903,9 +903,9 @@ def make_app():
         ui_version=3,
         title="Аренда дисков PS5, XBOX, игрового времени PC",
         version="v1",
-        url="/docs/swagger.json",
+        url="/api/docs/swagger.json",
         swagger_path="/docs",
-        static_path="/static/swagger",
+        static_path="/api/static/swagger",
         securityDefinitions={
             "ApiKeyAuth": {
                 "type": "apiKey",
