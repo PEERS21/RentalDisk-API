@@ -869,8 +869,10 @@ COMPONENTS_PATH = str(Path(__file__).parent / "components.yaml")
 def make_app():
     """Создаёт aiohttp Application и регистрирует маршруты и lifecycle hooks."""
     app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
-    app.add_routes(routes)
-    app.middlewares.append(validation_middleware)
+    api_app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
+    api_app.add_routes(routes)
+    api_app.middlewares.append(validation_middleware)
+    app.add_subapp("/api/", api_app)
 
     async def on_startup(app):
         logger.info("on_startup: creating grpc aio channel and stub (in running loop)")
@@ -894,12 +896,13 @@ def make_app():
         logger.info("on_cleanup complete")
 
     setup_aiohttp_apispec(
-        app=app,
+        app=api_app,
         ui_version=3,
         title="Аренда дисков PS5, XBOX, игрового времени PC",
         version="v1",
-        url="/api/docs/swagger.json",
-        swagger_path="/api/docs",
+        url="/docs/swagger.json",
+        swagger_path="/docs",
+        static_path="/static/swagger",
         securityDefinitions={
             "ApiKeyAuth": {
                 "type": "apiKey",
