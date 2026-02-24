@@ -873,6 +873,7 @@ def make_app():
     api_app.add_routes(routes)
     api_app.middlewares.append(validation_middleware)
     app.add_subapp("/api/", api_app)
+    logger.info("Version 1")
 
     async def on_startup(app):
         logger.info("on_startup: creating grpc aio channel and stub (in running loop)")
