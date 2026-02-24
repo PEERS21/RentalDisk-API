@@ -21,7 +21,8 @@ def require_auth():
                     async with session.get(
                             AUTH_SERVICE_URL,
                             headers=headers,
-                            cookies=cookies
+                            cookies=cookies,
+                            allow_redirects=False
                     ) as resp:
                         if resp.status in (301, 302):
                             redirect_url = resp.headers.get('Location')
