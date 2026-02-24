@@ -3,38 +3,34 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime, timedelta, UTC, timezone
+from os import getenv
 from pathlib import Path
 from typing import List
 
-from aiohttp import web, WSMsgType, WSMessage
-from redis.asyncio import Redis
-from sqlalchemy import select, and_, or_
-
-from grpc_proto import qr_pb2 as pb2
-from grpc_proto import qr_pb2_grpc as pb2_grpc
-
-import grpc
-
-from sqlalchemy.orm import selectinload
-import redis.asyncio as aioredis
-
-from http_ws.auth import require_auth
-from common.db_models import Item, Base, Booking, Disk, IssuedToken
-from common.db_init import ENGINE, AsyncSessionLocal
-from common.upload import save_uploaded_image
-
-from aiohttp import web
-from sqlalchemy import select, func
-from sqlalchemy.exc import NoResultFound
-from datetime import datetime, timedelta, UTC, timezone
-from os import getenv
 import dateutil.parser
-from aiohttp_swagger3 import SwaggerDocs, SwaggerUiSettings
+import grpc
+import redis.asyncio as aioredis
+from aiohttp import WSMsgType, WSMessage
+from aiohttp import web
+from aiohttp_apispec import docs, request_schema, response_schema
+from aiohttp_apispec import setup_aiohttp_apispec, validation_middleware
+from sqlalchemy import and_, or_
+from sqlalchemy import select, func
 
 from common.auth import make_hmac
+from common.db_init import ENGINE, AsyncSessionLocal
+from common.db_models import Item, Base, Booking, Disk
+from common.upload import save_uploaded_image
+from grpc_proto import qr_pb2 as pb2
+from grpc_proto import qr_pb2_grpc as pb2_grpc
+from http_ws.auth import require_auth
+from http_ws.schemas import ItemResponseSchema, BookingResponseSchema, CreateBookingRequestSchema, \
+    OccupiedTimesResponseSchema, OccupiedTimesRequestSchema, \
+    StopBookingRequestSchema, SimpleResponseSchema, ItemCreateRequestSchema, StatusResponseSchema
 
-TARGET_TZ = timezone(timedelta(hours=int(getenv("TZ_OFFSET_HOURS", ""))))
-MAX_BOOKING_DURATION = timedelta(hours=int(getenv("MAX_BOOKING_DURATION", "")))
+TARGET_TZ = timezone(timedelta(hours=int(getenv("TZ_OFFSET_HOURS", "5"))))
+MAX_BOOKING_DURATION = timedelta(hours=int(getenv("MAX_BOOKING_DURATION", "2")))
 MAX_BOOKING_SECONDS = int(MAX_BOOKING_DURATION.total_seconds())
 BASE_DIR = os.path.dirname(__file__)
 STATIC_ROOT = os.path.join(os.path.join(BASE_DIR, "http_ws"), "static")
@@ -59,15 +55,57 @@ def _extract_bearer(request: web.Request) -> str:
 
 async def authorize_request(request: web.Request):
     token = _extract_bearer(request)
-    if token != getenv("AUTH_STATIC_TOKEN", ""):
+    if token != getenv("AUTH_STATIC_TOKEN", "testtest"):
         _unauthorized("Invalid token")
+
+async def request_confirmation(booking_id, disk, user_login):
+    correlation = str(uuid.uuid4())
+    payload = {
+        "action": "confirm_return",
+        "booking_id": booking_id,
+        "disk": disk,
+        "user_login": user_login,
+        "requested_by": "inventory_service",
+        "requested_at": datetime.now(UTC).isoformat() + "Z",
+        "correlation_id": correlation
+    }
+
+    redis = aioredis.from_url(getenv("REDIS_URL", "redis://default:943ke1bKHZqvvgRcTqMg@localhost:6379"), decode_responses=True)
+    await redis.publish("bot:requests", json.dumps(payload))
+
+    # Опционально: ждать ответа с тайм-аутом
+    psub = redis.pubsub()
+    await psub.subscribe("bot:responses")
+    try:
+        # ждём ответа с совпадающим correlation_id
+        async def waiter():
+            async for msg in psub.listen():
+                if msg is None or msg.get("type") != "message":
+                    continue
+                data = json.loads(msg["data"])
+                if data.get("correlation_id") == correlation:
+                    return data
+            return None
+
+        response = await asyncio.wait_for(waiter(), timeout=60.0)
+    finally:
+        await psub.unsubscribe("bot:responses")
+        await psub.close()
+        await redis.close()
+
+    return response
+
+def protected_docs(**kwargs):
+    if 'security' not in kwargs:
+        kwargs['security'] = [{"CookieAuth": []}]
+    return docs(**kwargs)
 
 @routes.get("/ping")
 async def ping(request):
     return web.json_response({"status": "ok"})
 
-
 @routes.get("/static/{name:.*}")
+@require_auth()
 async def static_files(request):
     root = STATIC_ROOT
     name = request.match_info["name"]
@@ -76,42 +114,36 @@ async def static_files(request):
         raise web.HTTPNotFound()
     return web.FileResponse(path)
 
+@protected_docs(
+    tags=['Bookings'],
+    summary="Занятое время"
+)
+@request_schema(OccupiedTimesRequestSchema())
+@response_schema(OccupiedTimesResponseSchema(), 200)
 @routes.get("/occupied_times")
+@require_auth()
 async def occupied_times(request: web.Request):
-    """
-    GET params:
-      - date (required): YYYY-MM-DD (interpreted as date in UTC+5)
-      - disk_id (optional): integer id of disk
-
-    Returns JSON with occupied intervals converted to UTC+5.
-    """
     date_str = request.query.get("date")
     disk_id = request.query.get("disk_id")
 
     if not date_str:
         raise web.HTTPBadRequest(text="Missing 'date' query param in format YYYY-MM-DD")
 
-    # Парсим дату (ожидаем YYYY-MM-DD)
     try:
-        # строго форматируем date-only
         day_naive = datetime.strptime(date_str, "%Y-%m-%d")
     except Exception:
-        # запасной парсер — пытаемся из любой ISO-строки взять дату
         try:
             dt = dateutil.parser.parse(date_str)
             day_naive = datetime(dt.year, dt.month, dt.day)
         except Exception:
             raise web.HTTPBadRequest(text="Invalid date format. Use YYYY-MM-DD or ISO date.")
 
-    # Интерпретируем этот день как в целевом часовом поясе (UTC+5)
     day_start_local = day_naive.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=TARGET_TZ)
     day_end_local = day_start_local + timedelta(days=1)
 
-    # Переводим границы в UTC для запроса в базе (т.к. в БД хранится UTC)
     day_start_utc = day_start_local.astimezone(UTC)
     day_end_utc = day_end_local.astimezone(UTC)
 
-    # Теперь выбираем брони, перекрывающие [day_start_utc, day_end_utc)
     async with AsyncSessionLocal() as session:
         overlap_condition = and_(
             Booking.start_time < day_end_utc,
@@ -133,18 +165,15 @@ async def occupied_times(request: web.Request):
             s = b.start_time
             e = b.end_time or (b.return_time or day_end_utc)  # fallback if no end_time
 
-            # Если в БД хранятся naive datetime (без tzinfo), считаем их UTC
             if s.tzinfo is None:
                 s = s.replace(tzinfo=UTC)
             if e.tzinfo is None:
                 e = e.replace(tzinfo=UTC)
 
-            # Ограничиваем интервал границами запроса (в UTC)
             s_clipped_utc = s if s >= day_start_utc else day_start_utc
             e_clipped_utc = e if e <= day_end_utc else day_end_utc
 
             if s_clipped_utc < e_clipped_utc:
-                # Конвертируем в целевой TZ (UTC+5) для ответа
                 s_local = s_clipped_utc.astimezone(TARGET_TZ)
                 e_local = e_clipped_utc.astimezone(TARGET_TZ)
                 occupied.append({
@@ -153,12 +182,16 @@ async def occupied_times(request: web.Request):
                 })
 
     return web.json_response({
-        "date": day_start_local.date().isoformat(),   # возвращаем дату в виде локальной даты (UTC+5)
+        "date": day_start_local.date().isoformat(),
         "disk_id": int(disk_id) if disk_id else None,
         "occupied": occupied
     })
 
-
+@protected_docs(
+    tags=['Check'],
+    summary="Удалить запись для проверки получения или сдачи диска",
+)
+@response_schema(StatusResponseSchema(), 200)
 @routes.get("/del_check")
 @require_auth()
 async def del_check_item(request):
@@ -167,7 +200,7 @@ async def del_check_item(request):
         raise web.HTTPBadRequest(text="Missing query param: login")
 
     logger.info("connect to redis")
-    redis = aioredis.from_url(getenv("REDIS_URL", ""), decode_responses=True)
+    redis = aioredis.from_url(getenv("REDIS_URL", "redis://default:testtest@localhost:6379"), decode_responses=True)
     disk_name = await redis.get(f"check:{login}")
     if disk_name:
         logger.info("confirmed")
@@ -181,6 +214,11 @@ async def del_check_item(request):
     await redis.aclose()
     return web.json_response({"status": "how do you do this?"})
 
+@protected_docs(
+    tags=['Check'],
+    summary="Проверить получение или сдачи диска"
+)
+@response_schema(StatusResponseSchema, 200)
 @routes.get("/check")
 @require_auth()
 async def check_item(request):
@@ -189,7 +227,7 @@ async def check_item(request):
         raise web.HTTPBadRequest(text="Missing query param: login")
 
     logger.info("connect to redis")
-    redis = aioredis.from_url(getenv("REDIS_URL", ""), decode_responses=True)
+    redis = aioredis.from_url(getenv("REDIS_URL", "redis://default:943ke1bKHZqvvgRcTqMg@localhost:6379"), decode_responses=True)
     disk_name = await redis.get(f"check:{login}")
     if disk_name:
         logger.info("confirmed")
@@ -202,6 +240,12 @@ async def check_item(request):
     await redis.aclose()
     return web.json_response({"status": "how do you do this?"})
 
+@protected_docs(
+    tags=['Bookings'],
+    summary="Создать бронирование",
+)
+@request_schema(CreateBookingRequestSchema())
+@response_schema(BookingResponseSchema(), 201)
 @routes.post("/block")
 @require_auth()
 async def block_item(request):
@@ -209,13 +253,13 @@ async def block_item(request):
     login = request.get('user', dict()).get("login")
     disk_name = data.get("disk_name")
     start_ts = data.get("start_ts")
-    duration = data.get("duration_sec", int(getenv("DEFAULT_SEC_TIME", "")))
+    duration = data.get("duration_sec", int(getenv("DEFAULT_SEC_TIME", "3600")))
 
     if not login or not disk_name or not start_ts or not duration:
         raise web.HTTPBadRequest(text="Missing query param: disk_name or start_ts or duration or login")
 
     try:
-        duration = int(duration) if duration is not None else int(getenv("DEFAULT_SEC_TIME", ""))
+        duration = int(duration) if duration is not None else int(getenv("DEFAULT_SEC_TIME", "3600"))
         if duration <= 0:
             raise ValueError
     except ValueError:
@@ -269,7 +313,7 @@ async def block_item(request):
             res_cnt = await session.execute(cnt_q)
             user_active = res_cnt.scalar_one()
 
-            if user_active >= int(getenv("DISK_LIMIT", "")):
+            if user_active >= int(getenv("DISK_LIMIT", "2")):
                 status = "user reached limit"
                 raise web.HTTPBadRequest(text=status)
 
@@ -292,43 +336,12 @@ async def block_item(request):
         raise web.HTTPBadRequest(text=status)
     return web.json_response({"ok": ok_f, "status": status})
 
-async def request_confirmation(booking_id, disk, user_login):
-    correlation = str(uuid.uuid4())
-    payload = {
-        "action": "confirm_return",
-        "booking_id": booking_id,
-        "disk": disk,
-        "user_login": user_login,
-        "requested_by": "inventory_service",
-        "requested_at": datetime.now(UTC).isoformat() + "Z",
-        "correlation_id": correlation
-    }
-
-    redis = aioredis.from_url(getenv("REDIS_URL", ""), decode_responses=True)
-    await redis.publish("bot:requests", json.dumps(payload))
-
-    # Опционально: ждать ответа с тайм-аутом
-    psub = redis.pubsub()
-    await psub.subscribe("bot:responses")
-    try:
-        # ждём ответа с совпадающим correlation_id
-        async def waiter():
-            async for msg in psub.listen():
-                if msg is None or msg.get("type") != "message":
-                    continue
-                data = json.loads(msg["data"])
-                if data.get("correlation_id") == correlation:
-                    return data
-            return None
-
-        response = await asyncio.wait_for(waiter(), timeout=60.0)
-    finally:
-        await psub.unsubscribe("bot:responses")
-        await psub.close()
-        await redis.close()
-
-    return response
-
+@protected_docs(
+    tags=['Bookings'],
+    summary="Закрыть бронирование",
+)
+@request_schema(StopBookingRequestSchema())
+@response_schema(BookingResponseSchema(), 200)
 @routes.get("/unblock")
 @require_auth()
 async def unblock_item(request):
@@ -375,9 +388,13 @@ async def unblock_item(request):
 
     return web.json_response({"ok": ok_f, "status": status})
 
-
-
+@protected_docs(
+    tags=['Items'],
+    summary="Получить все позиции",
+)
+@response_schema(ItemResponseSchema(many=True), 200)
 @routes.get("/items")
+@require_auth()
 async def list_items(request):
     async with AsyncSessionLocal() as session:
         stmt = select(Item).where(Item.available == True).order_by(Item.created_at.desc())
@@ -385,6 +402,12 @@ async def list_items(request):
         items = result.scalars().all()
         return web.json_response([it.to_dict() for it in items])
 
+@protected_docs(
+    tags=['Items'],
+    summary="Установить доступность всем",
+    security=[{"ApiKeyAuth": []}]
+)
+@response_schema(SimpleResponseSchema(), 200)
 @routes.post("/availability/items")
 async def overwrite_availability_all(request):
     try:
@@ -407,15 +430,28 @@ async def overwrite_availability_all(request):
             await session.commit()
         return web.json_response({"ok": True})
 
-@routes.post("/availability/items/{id}")
+@protected_docs(
+    tags=['Items'],
+    summary="Установить доступность по name",
+    security=[{"ApiKeyAuth": []}],
+    parameters=[{
+        'in': 'path',
+        'name': 'name',
+        'schema': {'type': 'string'},
+        'required': True,
+        'description': 'ID'
+    }]
+)
+@response_schema(SimpleResponseSchema(), 200)
+@routes.post("/availability/items/{name}")
 async def overwrite_availability(request):
     try:
         await authorize_request(request)
     except web.HTTPUnauthorized:
         raise
-    item_id = int(request.match_info["id"])
+    item_name = int(request.match_info["name"])
     async with AsyncSessionLocal() as session:
-        stmt = select(Item).where(Item.id == item_id)
+        stmt = select(Item).where(Item.name == item_name)
         result = await session.execute(stmt)
         it = result.scalars().first()
         if not it:
@@ -432,6 +468,19 @@ async def overwrite_availability(request):
         await session.commit()
         return web.json_response({"ok": True})
 
+@protected_docs(
+    tags=['Items'],
+    summary="Удалить доступность по name",
+    security=[{"ApiKeyAuth": []}],
+    parameters=[{
+        'in': 'path',
+        'name': 'name',
+        'schema': {'type': 'string'},
+        'required': True,
+        'description': 'Name'
+    }]
+)
+@response_schema(SimpleResponseSchema(), 200)
 @routes.delete("/availability/items/{name}")
 async def delete_availability(request):
     try:
@@ -452,7 +501,21 @@ async def delete_availability(request):
         await session.commit()
         return web.json_response({"ok": True})
 
+@protected_docs(
+    tags=['Items'],
+    summary="Получить информацию об Item",
+    description="Возвращает Item по его ID",
+    parameters=[{
+        'in': 'path',
+        'name': 'id',
+        'schema': {'type': 'integer'},
+        'required': True,
+        'description': 'ID '
+    }]
+)
+@response_schema(ItemResponseSchema(), 200)
 @routes.get("/items/{id}")
+@require_auth()
 async def get_item(request):
     item_id = int(request.match_info["id"])
     async with AsyncSessionLocal() as session:
@@ -463,7 +526,16 @@ async def get_item(request):
             raise web.HTTPNotFound()
         return web.json_response(it.to_dict())
 
-@routes.post("/item")
+@protected_docs(
+    tags=['Items'],
+    summary="Создать новый предмет с изображением",
+    description="Принимает multipart/form-data. Поле categories может быть JSON-массивом или строкой через запятую.",
+    responses={
+        201: {"description": "Позиция создана"}},
+)
+@request_schema(ItemCreateRequestSchema(), location="form")
+@response_schema(ItemResponseSchema(), 201)
+@routes.post("/items")
 async def create_item(request):
     try:
         await authorize_request(request)
@@ -521,7 +593,7 @@ async def create_item(request):
                 fname2, w2, h2 = await save_uploaded_image(
                     client_img_content['content'],
                     client_img_content['filename'],
-                    getenv("IMAGES_DIR", "")
+                    getenv("IMAGES_DIR", "static/images")
                 )
                 item.client_img_filename = fname2
                 item.client_img_height = h2
@@ -535,6 +607,19 @@ async def create_item(request):
         await session.flush()
         return web.json_response(item.to_dict(), status=201)
 
+@protected_docs(
+    tags=['Items'],
+    summary="Удалить Item по id",
+    security=[{"ApiKeyAuth": []}],
+    parameters=[{
+        'in': 'path',
+        'name': 'id',
+        'schema': {'type': 'integer'},
+        'required': True,
+        'description': 'id'
+    }]
+)
+@response_schema(StatusResponseSchema(), 200)
 @routes.delete("/items/{id}")
 async def delete_item(request):
     try:
@@ -551,18 +636,23 @@ async def delete_item(request):
             raise web.HTTPNotFound()
         if it.img_filename:
             try:
-                os.remove(os.path.join(getenv("IMAGES_DIR", ""), it.img_filename))
+                os.remove(os.path.join(getenv("IMAGES_DIR", "static/images"), it.img_filename))
             except Exception:
                 pass
         if it.client_img_filename:
             try:
-                os.remove(os.path.join(getenv("IMAGES_DIR", ""), it.client_img_filename))
+                os.remove(os.path.join(getenv("IMAGES_DIR", "static/images"), it.client_img_filename))
             except Exception:
                 pass
         await session.delete(it)
         await session.commit()
         return web.json_response({"status": "deleted"})
 
+@protected_docs(
+    tags=['Bookings'],
+    summary="Получить текущие записи"
+)
+@response_schema(BookingResponseSchema(), 200)
 @routes.get("/my_bookings")
 @require_auth()
 async def get_my_bookings(request):
@@ -596,6 +686,10 @@ async def get_my_bookings(request):
 
     return web.json_response(bookings_list)
 
+@protected_docs(
+    tags=['Private'],
+    summary="Вебсокет отправки снимка с камеры"
+)
 @routes.get("/ws/upload")
 @require_auth()
 async def ws_upload(request):
@@ -704,7 +798,7 @@ async def ws_upload(request):
     # Call grpc.aio stub with async generator (client streaming)
     try:
         logger.info("Streaming to gRPC backend...")
-        response = await stub.UploadPhotos(grpc_gen(), timeout=int(getenv("GRPC_TIMEOUT", "")))
+        response = await stub.UploadPhotos(grpc_gen(), timeout=int(getenv("GRPC_TIMEOUT", "120")))
         # response is pb2.UploadSummary
         is_confirmed = response.confirmed
         disk_from_qr = response.disk
@@ -776,271 +870,17 @@ def make_app():
     """Создаёт aiohttp Application и регистрирует маршруты и lifecycle hooks."""
     app = web.Application(client_max_size=WS_MAX_MSG_SIZE)
     app.add_routes(routes)
-
-    swagger = SwaggerDocs(app, swagger_ui_settings=SwaggerUiSettings(path="/docs"),
-                          components=COMPONENTS_PATH)
-
-    item_schema = {
-        "type": "object",
-        "properties": {
-            "id": {"type": "integer"},
-            "name": {"type": "string"},
-            "company": {"type": ["string", "null"]},
-            "title": {"type": ["string", "null"]},
-            "content": {"type": ["string", "null"]},
-            "img_filename": {"type": ["string", "null"]},
-            "img_width": {"type": ["integer", "null"]},
-            "img_height": {"type": ["integer", "null"]},
-            "client_img_filename": {"type": ["string", "null"]},
-            "client_img_width": {"type": ["integer", "null"]},
-            "client_img_height": {"type": ["integer", "null"]},
-            "categories": {"type": "array", "items": {"type": "integer"}},
-            "created_at": {"type": ["string", "null"], "format": "date-time"},
-            "available": {"type": "boolean"},
-        },
-        "required": ["id", "name"]
-    }
-
-    occupied_interval_schema = {
-        "type": "object",
-        "properties": {
-            "start": {"type": "string", "format": "date-time"},
-            "end": {"type": "string", "format": "date-time"}
-        }
-    }
-
-    occupied_resp_schema = {
-        "type": "object",
-        "properties": {
-            "date": {"type": "string"},
-            "disk_id": {"type": ["integer", "null"]},
-            "occupied": {"type": "array", "items": occupied_interval_schema}
-        }
-    }
-
-    simple_status_schema = {
-        "type": "object",
-        "properties": {
-            "status": {"type": "string"}
-        }
-    }
-
-    ok_status_schema = {
-        "type": "object",
-        "properties": {
-            "ok": {"type": "boolean"},
-            "status": {"type": "string"}
-        }
-    }
-
-    my_bookings_item_schema = {
-        "type": "object",
-        "properties": {
-            "id": {"type": "integer"},
-            "disk_name": {"type": "string"},
-            "start_ts": {"type": "integer"},
-            "end_ts": {"type": ["integer", "null"]}
-        }
-    }
-
-    swagger.add_get(
-        "/ping",
-        ping,
-        description="Health check",
-        security=[{"BearerAuth": []}],
-        responses={200: {"description": "ok", "content": {
-            "application/json": {"schema": {"type": "object", "properties": {"status": {"type": "string"}}}}}}}
-    )
-
-    # 2) occupied_times (query params: date, disk_id)
-    swagger.add_get(
-        "/occupied_times",
-        occupied_times,
-        description="Get occupied times",
-        security=[{"BearerAuth": []}],
-        parameters=[
-            {"name": "date", "in": "query", "required": True, "schema": {"type": "string"},
-             "description": "Дата в формате YYYY-MM-DD"},
-            {"name": "disk_id", "in": "query", "required": False, "schema": {"type": "integer"},
-             "description": "ID диска (опционально)"}
-        ],
-        responses={
-            200: {"description": "Occupied intervals",
-                  "content": {"application/json": {"schema": occupied_resp_schema}}},
-            400: {"description": "Bad request", "content": {
-                "application/json": {"schema": {"type": "object", "properties": {"error": {"type": "string"}}}}}}
-        }
-    )
-
-    swagger.add_get(
-        "/check",
-        check_item,
-        description="Check presence (light)",
-        security=[{"BearerAuth": []}],
-        responses={200: {"description": "confirmed", "content": {"application/json": {"schema": simple_status_schema}}},
-                   401: {"description": "Unauthorized"}}
-    )
-
-    swagger.add_get(
-        "/del_check",
-        del_check_item,
-        description="Check and delete marker (consume)",
-        security=[{"BearerAuth": []}],
-        responses={200: {"description": "confirmed", "content": {"application/json": {"schema": simple_status_schema}}},
-                   401: {"description": "Unauthorized"}}
-    )
-
-    swagger.add_post(
-        "/block",
-        block_item,
-        description="Block disk (create booking)",
-        security=[{"BearerAuth": []}],
-        request_body={
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "disk_name": {"type": "string"},
-                            "start_ts": {"type": "integer"},
-                            "duration_sec": {"type": "integer"}
-                        },
-                        "required": ["disk_name", "start_ts"]
-                    }
-                }
-            }
-        },
-        responses={
-            200: {"description": "OK", "content": {"application/json": {"schema": ok_status_schema}}},
-            400: {"description": "Bad request"},
-            401: {"description": "Unauthorized"}
-        }
-    )
-
-    swagger.add_get(
-        "/unblock",
-        unblock_item,
-        description="Unblock (confirm return)",
-        security=[{"BearerAuth": []}],
-        parameters=[{"name": "disk", "in": "query", "required": True, "schema": {"type": "string"}}],
-        responses={
-            200: {"description": "Result", "content": {"application/json": {"schema": ok_status_schema}}},
-            400: {"description": "Bad request"},
-            401: {"description": "Unauthorized"},
-        }
-    )
-
-    swagger.add_get(
-        "/items",
-        list_items,
-        description="List available items",
-        security=[{"BearerAuth": []}],
-        responses={200: {"description": "List of items",
-                         "content": {"application/json": {"schema": {"type": "array", "items": item_schema}}}}}
-    )
-
-    swagger.add_get(
-        "/items/{id}",
-        get_item,
-        description="Get item by id",
-        security=[{"BearerAuth": []}],
-        parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
-        responses={200: {"description": "Item", "content": {"application/json": {"schema": item_schema}}},
-                   404: {"description": "Not found"}}
-    )
-
-    swagger.add_post(
-        "/item",
-        create_item,
-        description="Create item",
-        security=[{"BearerAuth": []}],
-        request_body={
-            "required": True,
-            "content": {
-                "multipart/form-data": {
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "company": {"type": "string"},
-                            "title": {"type": "string"},
-                            "content": {"type": "string"},
-                            "categories": {"type": "string", "description": "JSON array or CSV string"},
-                            "client_img": {"type": "string", "format": "binary"}
-                        },
-                        "required": ["name"]
-                    }
-                }
-            }
-        },
-        responses={201: {"description": "Created", "content": {"application/json": {"schema": item_schema}}},
-                   401: {"description": "Unauthorized"}}
-    )
-
-    swagger.add_delete(
-        "/items/{id}",
-        delete_item,
-        security=[{"BearerAuth": []}],
-        description="Delete item (remove db row)",
-        parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
-        responses={200: {"description": "Deleted"}, 401: {"description": "Unauthorized"},
-                   404: {"description": "Not found"}}
-    )
-
-    swagger.add_post(
-        "/availability/items",
-        overwrite_availability_all,
-        security=[{"BearerAuth": []}],
-        description="Create disks from items (bulk)",
-        responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}}
-    )
-
-    swagger.add_post(
-        "/availability/items/{id}",
-        overwrite_availability,
-        security=[{"BearerAuth": []}],
-        description="Create disk for item by id",
-        parameters=[{"name": "id", "in": "path", "required": True, "schema": {"type": "integer"}}],
-        responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}, 404: {"description": "Not found"}}
-    )
-
-    swagger.add_delete(
-        "/availability/items/{name}",
-        delete_availability,
-        security=[{"BearerAuth": []}],
-        description="Mark disk unavailable",
-        parameters=[{"name": "name", "in": "path", "required": True, "schema": {"type": "string"}}],
-        responses={200: {"description": "OK"}, 401: {"description": "Unauthorized"}, 404: {"description": "Not found"}}
-    )
-
-    swagger.add_get(
-        "/my_bookings",
-        get_my_bookings,
-        security=[{"BearerAuth": []}],
-        description="List bookings for current user",
-        parameters=[{"name": "pickupped", "in": "query", "required": False, "schema": {"type": "string"}}],
-        responses={200: {"description": "Bookings list", "content": {
-            "application/json": {"schema": {"type": "array", "items": my_bookings_item_schema}}}},
-                   401: {"description": "Unauthorized"}}
-    )
-
-    swagger.add_get(
-        "/ws/upload",
-        ws_upload,
-        description="WebSocket file uploader (upgrade to ws)",
-        security=[{"BearerAuth": []}],
-        responses={101: {"description": "Switching Protocols (WebSocket upgrade)"}},
-    )
+    app.middlewares.append(validation_middleware)
 
     async def on_startup(app):
         logger.info("on_startup: creating grpc aio channel and stub (in running loop)")
-        channel = grpc.aio.insecure_channel(getenv("GRPC_ADDR", ""))
+        channel = grpc.aio.insecure_channel(getenv("GRPC_ADDR", "localhost:50051"))
         stub = pb2_grpc.qrStub(channel)
         app["grpc_channel"] = channel
         app["grpc_stub"] = stub
         logger.info("gRPC channel and stub created")
         await init_db()
+        logger.info("on_startup complete")
 
     async def on_cleanup(app):
         logger.info("on_cleanup: closing grpc channel")
@@ -1051,6 +891,30 @@ def make_app():
         except Exception:
             logger.exception("Error closing grpc channel in on_cleanup")
         await close_engine(app)
+        logger.info("on_cleanup complete")
+
+    setup_aiohttp_apispec(
+        app=app,
+        ui_version=3,
+        title="Аренда дисков PS5, XBOX, игрового времени PC",
+        version="v1",
+        url="/api/docs/swagger.json",
+        swagger_path="/api/docs",
+        securityDefinitions={
+            "ApiKeyAuth": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "Authorization",
+                "description": "Токен в формате: Bearer <token>"
+            },
+            "CookieAuth": {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": "session_id",
+                "description": "Авторизация через сессионную куку"
+            }
+        }
+    )
 
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)

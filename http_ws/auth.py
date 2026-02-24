@@ -1,41 +1,43 @@
 import functools
-from typing import Optional
-from aiohttp import web
-import hmac
-import hashlib
-
-from sqlalchemy import select, delete
-import time
+from aiohttp import web, ClientSession
 from os import getenv
 
+AUTH_SERVICE_URL = getenv("AUTH_SERVICE_URL", "http://localhost:8888/verify")
 
-def _forbidden_response(detail: str = "forbidden"):
-    return web.json_response({"error": detail}, status=403)
 
 def require_auth():
-    """
-    Декоратор TODO изменить на ручку /verify
-    """
-    def decorator(handler):
-        @functools.wraps(handler)
-        async def wrapper(request: web.Request, *args, **kwargs):
-            """token = _extract_token_from_request(request)
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(request):
+            headers = {}
+            if 'Authorization' in request.headers:
+                headers['Authorization'] = request.headers['Authorization']
 
-            if not token:
-                return web.HTTPFound(getenv("AUTH_SERVER", "")+f"?next={request.rel_url}")
+            cookies = request.cookies
 
             try:
-                token_hash = _make_hmac(token)
-            except Exception:
-                return web.HTTPFound(getenv("AUTH_SERVER", "")+f"?next={request.rel_url}")
+                async with ClientSession() as session:
+                    async with session.get(
+                            AUTH_SERVICE_URL,
+                            headers=headers,
+                            cookies=cookies
+                    ) as resp:
+                        if resp.status in (301, 302):
+                            redirect_url = resp.headers.get('Location')
+                            raise web.HTTPFound(location=redirect_url)
 
-            info = await _find_token_hash(token_hash)
-            if not info:
-                return web.HTTPFound(getenv("AUTH_SERVER", "")+f"?next={request.rel_url}")
+                        if resp.status != 200:
+                            error_data = await resp.json()
+                            return web.json_response(error_data, status=resp.status)
 
-            request["user"] = {"login": info["user"], "issued_at": info["issued_at"], "expires_at": info["expires_at"]}"""
-            request["user"] = {"login": "tamelaos_test"}
-            return await handler(request, *args, **kwargs)
+                        auth_info = await resp.json()
+                        request['user'] = {"login": auth_info.get('user')}
+
+            except Exception as e:
+                return web.json_response({'error': 'auth_service_unavailable'}, status=503)
+
+            return await func(request)
 
         return wrapper
+
     return decorator

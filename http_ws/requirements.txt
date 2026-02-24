@@ -12,4 +12,6 @@ PyJWT
 redis==7.2.0
 python-dateutil
 aiomysql
-aiohttp-swagger3
+aiohttp-apispec
+marshmallow==3.26.1
+setuptools
