@@ -34,7 +34,7 @@ def require_auth():
                         request['user'] = {"login": auth_info.get('user')}
 
             except Exception as e:
-                return web.json_response({'error': 'auth_service_unavailable'}, status=503)
+                return web.json_response({'error': 'auth_service_unavailable', 'debug': e}, status=503)
 
             return await func(request)
 
