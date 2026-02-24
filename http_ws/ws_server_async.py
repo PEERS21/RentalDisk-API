@@ -105,7 +105,6 @@ async def ping(request):
     return web.json_response({"status": "ok"})
 
 @routes.get("/static/{name:.*}")
-@require_auth()
 async def static_files(request):
     root = STATIC_ROOT
     name = request.match_info["name"]
